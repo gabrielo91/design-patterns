@@ -5,18 +5,59 @@ const { marked } = require('marked');
 
 const app = express();
 
-// Custom renderer to generate header IDs safely.
-// We convert both raw and text to strings so that string methods work properly.
+/**
+ * Custom renderer to generate header IDs safely.
+ * In Marked v4, the heading function receives a token object.
+ */
 const renderer = new marked.Renderer();
-renderer.heading = function (text, level, raw, slugger) {
-  // Use raw if available and a string; otherwise, use text.
-  const base = typeof raw === 'string' ? raw : String(text);
-  // Generate a slug: use the slugger if available; otherwise, a simple conversion.
-  const slug = slugger
-    ? slugger.slug(String(base))
-    : String(base).toLowerCase().replace(/\W+/g, '-').replace(/^-|-$/g, '');
-  return `<h${level} id="${slug}">${String(text)}</h${level}>`;
+renderer.heading = function (token) {
+  // token is expected to have properties: depth, text, raw, tokens, etc.
+  const level = token.depth; // e.g., 1 for '#', 2 for '##', etc.
+  const text = token.text; // already the plain text of the header
+  // Generate a slug from the header text:
+  const base = String(text);
+  const slug = base.toLowerCase().replace(/\W+/g, '-').replace(/^-|-$/g, '');
+  console.log(
+    `Generated header: "${text}" (level ${level}) with slug: "${slug}"`
+  );
+  return `<h${level} id="${slug}">${text}</h${level}>`;
 };
+
+/**
+ * Generate a Table of Contents (TOC) from Markdown headings.
+ * Scans for lines starting with one or more '#' characters.
+ */
+function generateTOC(markdownData) {
+  const lines = markdownData.split('\n');
+  const tocItems = [];
+  const headingRegex = /^(#{1,6})\s+(.*)/;
+  lines.forEach((line) => {
+    const match = line.match(headingRegex);
+    if (match) {
+      const level = match[1].length;
+      const title = match[2].trim();
+      // Generate slug using the same simple logic as in the renderer.
+      const slug = title
+        .toLowerCase()
+        .replace(/\W+/g, '-')
+        .replace(/^-|-$/g, '');
+      tocItems.push({ level, title, slug });
+    }
+  });
+  console.log('Generated TOC Items:', tocItems);
+  if (tocItems.length === 0) {
+    return ''; // No headings found.
+  }
+  let tocHtml =
+    '<nav id="toc" style="margin-bottom:20px; padding:10px; border:1px solid #ddd; background:#f0f0f0; border-radius:4px;"><h2>Table of Contents</h2>';
+  tocItems.forEach((item) => {
+    tocHtml += `<div style="margin-left: ${
+      (item.level - 1) * 20
+    }px;"><a href="#${item.slug}">${item.title}</a></div>`;
+  });
+  tocHtml += '</nav>';
+  return tocHtml;
+}
 
 app.get('/', (req, res) => {
   const mdFilePath = path.join(__dirname, 'README.md');
@@ -29,11 +70,23 @@ app.get('/', (req, res) => {
         .send('Internal Server Error: Could not read Markdown file.');
     }
 
-    // Convert the Markdown file to HTML using our custom renderer.
-    let htmlContent = marked.parse(markdownData, { renderer });
+    // Generate the TOC from the raw markdown.
+    const tocHtml = generateTOC(markdownData);
 
-    // Remove any stray "[object Object]" strings that might have crept in.
+    // Parse the markdown using our custom renderer.
+    // The option "mangle: false" is added to prevent unwanted mangling.
+    let htmlContent = marked.parse(markdownData, { renderer, mangle: false });
+    // Remove any stray "[object Object]" strings.
     htmlContent = htmlContent.replace(/\[object Object\]/g, '');
+
+    // If no TOC was generated, prepend a note.
+    if (!tocHtml) {
+      htmlContent =
+        `<p><em>Note: No headings found for navigation. Please ensure your Markdown file uses proper header syntax (e.g., "## Creational Design Patterns").</em></p>` +
+        htmlContent;
+    } else {
+      htmlContent = tocHtml + htmlContent;
+    }
 
     // Build the full HTML template.
     const fullHtml = `
@@ -45,7 +98,7 @@ app.get('/', (req, res) => {
         <title>Design Patterns in TypeScript - Gabriel Ortega, Software Engineer</title>
         <!-- Google Fonts for modern typography -->
         <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500&display=swap" rel="stylesheet" />
-        <!-- Highlight.js CSS for code block styling -->
+        <!-- Highlight.js CSS for code block styling (light theme) -->
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css">
         <style>
           /* Smooth scrolling for in-page anchor links */
@@ -130,20 +183,42 @@ app.get('/', (req, res) => {
           .container.dark-mode h6 {
             color: #fff;
           }
-          /* Code block contrast in dark mode */
+          /* Code block contrast in dark mode (using VS Code dark theme colors) */
           body.dark-mode pre {
-            background: #1e1e1e !important;
-            color: #f8f8f2 !important;
+            background: #282c34 !important;
+            color: #abb2bf !important;
+            border: 1px solid #3a3f4b;
           }
           body.dark-mode code {
-            background: #1e1e1e !important;
-            color: #f8f8f2 !important;
+            background: #282c34 !important;
+            color: #abb2bf !important;
           }
           body.dark-mode a {
             color: #4fc3f7;
           }
           #toggleMode.dark-mode {
             color: #f9f9f9;
+          }
+          /* TOC styling */
+          #toc {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: #f0f0f0;
+            border-radius: 4px;
+          }
+          body.dark-mode #toc {
+            background: #2a2a2a;
+            border-color: #444;
+          }
+          #toc h2 {
+            margin-top: 0;
+          }
+          #toc a {
+            color: #2980b9;
+          }
+          body.dark-mode #toc a {
+            color: #4fc3f7;
           }
         </style>
       </head>
@@ -161,15 +236,15 @@ app.get('/', (req, res) => {
         <!-- Load Highlight.js -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
         <script>
-          // Initialize syntax highlighting for all code blocks.
+          // Initialize syntax highlighting for code blocks.
           hljs.highlightAll();
-          // Dark/light mode toggle functionality.
+          // Toggle dark/light mode functionality.
           const toggleButton = document.getElementById('toggleMode');
           toggleButton.addEventListener('click', () => {
             document.body.classList.toggle('dark-mode');
             document.querySelector('.container').classList.toggle('dark-mode');
             toggleButton.classList.toggle('dark-mode');
-            // Update the toggle icon based on the mode.
+            // Update the toggle icon based on the current mode.
             if (document.body.classList.contains('dark-mode')) {
               toggleButton.textContent = '☀️';
             } else {
